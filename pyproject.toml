@@ -1,0 +1,55 @@
+[project]
+name = "crypto-predictor-system"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "candles",
+    "loguru>=0.7.3",
+    "news",
+    "news-sentiment",
+    "predictor",
+    "quixstreams>=3.13.1",
+    "requests>=2.32.3",
+    "risingwave-py",
+    "technical-indicators",
+    "trades",
+    "websocket-client>=1.8.0",
+]
+
+[project.optional-dependencies]
+talib = [
+    "ta-lib>=0.6.3",
+]
+
+[tool.uv.workspace]
+members = ["services/trades", "services/candles", "services/technical_indicators", "services/predictor", "services/news", "services/news-sentiment"]
+
+[tool.uv.sources]
+trades = { workspace = true }
+candles = { workspace = true }
+technical-indicators = { workspace = true }
+predictor = { workspace = true }
+risingwave-py = { git = "https://github.com/risingwavelabs/risingwave-py" }
+news = { workspace = true }
+news-sentiment = { workspace = true }
+
+[tool.ruff]
+line-length = 88
+lint.select = [
+    "C",  # mccabe rules
+    "F",  # pyflakes rules
+    "E",  # pycodestyle error rules
+    "W",  # pycodestyle warning rules
+    "B",  # flake8-bugbear rules
+    "I",  # isort rules
+]
+lint.ignore = [
+    "C901",  # max-complexity-10
+    "E501",  # line-too-long
+]
+
+[tool.ruff.format]
+indent-style = "space"
+quote-style = "single"

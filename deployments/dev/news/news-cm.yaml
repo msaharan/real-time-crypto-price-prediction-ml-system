@@ -1,0 +1,12 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: news
+  namespace: rtcppml
+data:
+  # Quote them!!! - by Marius
+  # https://12factor.net/config
+  CRYPTOPANIC_API_KEY: "b3537f154f62198892b47d0add8791b646c0f04d"
+  KAFKA_BROKER_ADDRESS: "kafka-e11b-kafka-bootstrap.kafka.svc.cluster.local:9092"
+  KAFKA_OUTPUT_TOPIC: "news"

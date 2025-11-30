@@ -1,0 +1,7 @@
+technical_indicators:
+  sma:
+    - timeperiod: 7
+    - timeperiod: 14
+    - timeperiod: 21
+
+

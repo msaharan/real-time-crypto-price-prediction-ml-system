@@ -1,0 +1,18 @@
+[project]
+name = "news-sentiment"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "msaharan", email = "mohit@msaharan.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "baml-py>=0.89.0",
+    "opik>=1.7.30",
+    "tqdm>=4.67.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
