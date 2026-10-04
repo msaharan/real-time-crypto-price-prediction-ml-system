@@ -1,73 +1,116 @@
-# Real Time Crypto Price Prediction System
+# Real-Time Crypto Price Prediction System
 
-An end-to-end, streaming ML platform that forecasts cryptocurrency prices in real time. Trades and headlines are ingested continuously, technical indicators and sentiment are computed on the fly, models are trained and tracked, and fresh predictions are served via a low-latency API.
+A streaming ML system that forecasts short-term cryptocurrency prices from live exchange data.
 
-## Highlights
-- Real-time data plumbing: Kafka backbone with RisingWave as the streaming database for windowed aggregates and materialized views.
-- Feature engineering on the wire: rolling OHLCV candles plus TA-Lib indicators (SMA/EMA/RSI/MACD/OBV) kept hot in RisingWave tables.
-- LLM-powered sentiment: CryptoPanic headlines scored through a BAML client that can talk to Anthropic or OpenAI-compatible endpoints.
-- ML lifecycle: training jobs pull the latest features, validate/profile data, train scikit-learn/XGBoost baselines, and log/registry-manage models in MLflow.
-- Online inference: a streaming scorer consumes new feature rows and writes predictions back to RisingWave for downstream consumers.
-- Serving layer: Rust (Axum + SQLx) API exposes `GET /predictions?pair=<PAIR>` backed by a live `latest_predictions` view.
-- Observability & ops: Grafana dashboards, Kafka UI, and dev/prod Kubernetes manifests (Kind for local) plus Docker image builds via Make targets.
+- Kraken trades flow through Kafka into one-minute candles and technical-indicator features, which are stored in RisingWave.
+- A scheduled pipeline trains, validates and registers models in MLflow.
+- An online predictor scores every new feature row, and a Rust API serves the latest forecast.
+- A separate service scores crypto news sentiment with an LLM.
 
-## Architecture in brief
-1. **Ingest**: Kraken spot trades and CryptoPanic news flow into Kafka topics.
-2. **Aggregate**: RisingWave produces rolling candles and exposes them as materialized views.
-3. **Engineer**: Technical indicator service maintains sliding windows and emits features to Kafka and RisingWave.
-4. **Enrich**: News is LLM-scored for sentiment and joined to market features by pair/timestamp.
-5. **Train**: Batch/stream-aligned training pulls from RisingWave, profiles data, tunes models, and registers the best in MLflow.
-6. **Predict**: An online predictor streams feature updates, scores with the latest registered model, and persists predictions.
-7. **Serve**: Axum API reads the `latest_predictions` view and responds with near-real-time forecasts.
+> **Status:** in progress (self-directed external training, target Q4 2026). This repository is a public preview. The source code is private and available on request.
+
+## At a glance
+
+| | |
+|---|---|
+| **Data** | Live Kraken spot trades for 8 pairs (BTC, ETH, SOL and XRP against USD and EUR) over WebSocket, with a REST backfill; CryptoPanic news headlines |
+| **Features** | 1-minute OHLCV candles (event-time windows) and 16 technical indicators: SMA, EMA and RSI at 7, 14, 21 and 60 candles, plus MACD and OBV |
+| **Target** | BTC/USD close price 5 minutes ahead |
+| **Baseline** | Persistence: the price in 5 minutes equals the current price |
+| **Model** | Huber regression (robust to price jumps) on standardised features, tuned with Optuna using time-series cross-validation |
+| **Evaluation** | Chronological train/test split; test MAE is compared with the baseline before a model is registered |
+| **Retraining** | Hourly Kubernetes CronJob on a rolling 60-day window |
+| **Serving** | Predictions are precomputed on every feature update and served by a Rust (Axum) API |
+
+## Architecture
 
 ```mermaid
-graph TD
-  subgraph Ingestion
-    KR["Kraken trades"] --> TRADES_SVC["services/trades<br/>normalize + publish"]
-    CP["CryptoPanic news"] --> NEWS_SVC["services/news<br/>poll + publish"]
+flowchart TB
+  subgraph MD["Market data"]
+    direction LR
+    KR["Kraken trades<br/>WebSocket / REST"] --> TR["trades"] -->|Kafka| CA["candles<br/>60 s event-time windows"] -->|Kafka| TI["technical_indicators<br/>stateful, TA-Lib"]
   end
 
-  TRADES_SVC --> K_TRADES["(Kafka topic: trades)"]
-  NEWS_SVC --> K_NEWS["(Kafka topic: news)"]
-
-  subgraph Market Aggregation
-    K_TRADES --> CANDLES_SVC["services/candles<br/>OHLCV aggregation"]
-    CANDLES_SVC --> K_CANDLES["(Kafka topic: candles)"]
-    K_CANDLES --> TECH_SVC["services/technical_indicators<br/>rolling SMA/EMA/RSI/MACD/OBV"]
-    TECH_SVC --> K_TECH["(Kafka topic: technical_indicators)"]
+  subgraph NS["News"]
+    direction LR
+    CP["CryptoPanic"] --> NW["news"] -->|Kafka| SE["news-sentiment<br/>LLM via BAML"]
   end
 
-  subgraph Sentiment
-    K_NEWS --> SENT_SVC["services/news-sentiment<br/>LLM scoring via BAML"]
-    SENT_SVC --> K_SENT["(Kafka topic: sentiment)"]
+  TI -->|Kafka| RW[("RisingWave<br/>feature store")]
+  SE -->|Kafka| RW
+
+  subgraph ML["Training and serving"]
+    direction LR
+    TRAIN["train (hourly)<br/>validate, tune, gate"] --> MLF[("MLflow<br/>tracking + registry")] -->|registered model| PRED["predict"] --> RWP[("RisingWave<br/>predictions view")] --> API["prediction-api<br/>Rust / Axum"]
   end
 
-  K_TRADES --> RW["RisingWave<br/>streaming DB & feature store"]
-  K_CANDLES --> RW
-  K_TECH --> RW
-  K_SENT --> RW
-
-  RW --> TRAIN["services/predictor/src/predictor/train.py<br/>validate/profile + train"]
-  TRAIN --> MLFLOW["MLflow tracking + model registry"]
-
-  RW --> PREDICT["services/predictor/src/predictor/predict.py<br/>changefeeds -> score"]
-  MLFLOW -->|load latest model| PREDICT
-  PREDICT --> RW_PRED["RisingWave predictions table/view"]
-  RW_PRED --> API["services/prediction-api (Rust/Axum/SQLx)<br/>GET /predictions?pair=..."]
-  API --> CLIENTS["Clients / Dashboards"]
+  RW -->|SQL| TRAIN
+  RW -->|change subscription| PRED
 ```
 
-## Why it matters
-- Demonstrates a modern streaming + ML stack that keeps feature freshness and model drift under control.
-- Shows end-to-end ownership: ingestion, feature engineering, MLOps, inference, API design, and observability.
-- Built to be productionizable: containerized services, Kubernetes manifests, env-driven config, and clear separation between batch and online paths.
+## Components
 
-## Experience gained
-- Streaming data engineering (Kafka, RisingWave), windowed aggregations, and online feature stores.
-- Applied ML with scikit-learn/XGBoost, model tracking/registry in MLflow, and offline/online feature parity.
-- LLM integration for domain-specific sentiment scoring via BAML.
-- Backend/API engineering in Rust with Axum and SQLx, plus Python service orchestration.
-- DevOps practices: Docker/Kustomize/Kind, environment templating, and dashboarding for SLO visibility.
+| Service | Role |
+|---|---|
+| `trades` | Streams Kraken trades into Kafka, keyed by pair. Runs live (WebSocket) or as a historical backfill (REST). |
+| `candles` | Aggregates trades into 60-second OHLCV candles with event-time tumbling windows (Quix Streams). |
+| `technical_indicators` | Keeps a per-pair rolling state of recent candles and computes TA-Lib indicators on every update. |
+| `news` | Polls CryptoPanic and publishes new headlines, deduplicated with persisted state. |
+| `news-sentiment` | Scores each headline per coin (bullish or bearish) with an LLM via BAML. |
+| `predictor` (train) | Loads features from RisingWave, builds the target, validates and profiles the data, tunes and evaluates the model, and registers it in MLflow. |
+| `predictor` (predict) | Subscribes to changes in the RisingWave feature table, scores new rows with the registered model, and writes the predictions back. |
+| `prediction-api` | Rust (Axum + SQLx) service. `GET /predictions?pair=BTC/USD` reads a `latest_predictions` materialised view. |
+
+## ML pipeline
+
+**Training** (hourly):
+
+1. Load the last 60 days of BTC/USD one-minute features from RisingWave.
+2. Build the target: the close price five candles ahead.
+3. Validate the data (a missing-data threshold, Great Expectations checks) and profile it (ydata-profiling). Log the dataset, the parameters and the report to MLflow.
+4. Split the data chronologically, 80/20.
+5. Score the persistence baseline.
+6. Tune a Huber regression with Optuna, using expanding-window time-series cross-validation on the training set. LazyPredict is available for screening other regressors.
+7. Compare test MAE with the baseline. Register the model, with its input signature, only if it passes the promotion gate.
+
+**Inference:** the predictor loads the registered model from MLflow and listens to the feature table through a RisingWave change subscription. It writes each prediction with the model name, the model version and the timestamp the prediction refers to. The API reads the latest prediction per pair, so serving needs no ML code.
+
+## LLM news sentiment
+
+- **Structured output** via BAML: a score per coin (+1 bullish, −1 bearish) and a reason. Coins the headline isn't relevant to are left out.
+- **Model choice:** works with Anthropic models or any OpenAI-compatible endpoint, including local open-weight models served by Ollama or llama.cpp.
+- **Evaluation:**
+  - built a golden dataset by labelling historical CryptoPanic headlines with a large teacher model (Claude Opus 4);
+  - curated it with a human in the loop;
+  - compared cheaper local models (DeepSeek-R1 7B and 8B) on per-coin agreement, using Opik.
+- Sentiment scores are stored in RisingWave. Joining them into the model's features is on the roadmap.
+
+## Infrastructure and MLOps
+
+- Kafka (Strimzi) and RisingWave on Kubernetes, using a Kind cluster for local development. Each service has its own Docker image and Kustomize manifests, built and deployed with Make targets.
+- MLflow tracking server and model registry, backed by Postgres and MinIO.
+- Grafana dashboards on RisingWave, Kafka UI and Metabase for observability.
+- Python 3.12 with uv, pydantic-settings for configuration, and ruff with pre-commit. Rust for the API.
+
+## Roadmap
+
+The next steps are mostly on the research side:
+
+- Predict log-returns instead of price levels. Evaluate with the information coefficient, hit rate and a cost-aware backtest.
+- Replace level features with stationary ones, e.g. price relative to its moving averages, recent returns and realised volatility.
+- Score only completed candles, so live inputs match the training data.
+- Join news sentiment into the features with a point-in-time (as-of) join.
+- Capture trade direction to enable order-flow features.
+- Tighten promotion: require the model to beat the baseline consistently across walk-forward folds.
+- Reload newly registered models without restarting the predictor, and add data-drift reports.
+
+## What this project covers
+
+- **Streaming data engineering:** Kafka, event-time windowing, stateful stream processing, RisingWave materialised views and change subscriptions.
+- **Applied ML for time series:** leakage-aware targets, chronological validation, baselines, hyperparameter tuning, experiment tracking and a model registry.
+- **LLM engineering:** structured outputs, evaluation against a curated golden dataset, and local open-weight models.
+- **Backend and platform:** a Rust API, Docker and Kubernetes.
 
 ## Source code
-- This repo intentionally ships as a teaser without source code. If you are interested in the source code, please reach out to me.
+
+The source code is private. If you'd like to see it, please get in touch.
